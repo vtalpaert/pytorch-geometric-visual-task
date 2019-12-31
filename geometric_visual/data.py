@@ -2,23 +2,39 @@ import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
 import torch as th
-from torch_geometric.data import Data, DataLoader
-from torch_geometric.utils import from_networkx, to_networkx
+import torch.nn.functional as F
+from torch_geometric.data import Data
+from torch_geometric.utils import to_networkx
+from torch_geometric.nn import radius_graph
 
 
-def generate_random_image(height, width, square_size, square_color):
+def generate_random_image_np(height, width, square_size, square_color):
     assert square_size > 1
-    #image = np.zeros((width, height, 3))
     image = np.random.random((width, height, 3))
     square_x = np.random.randint(0, width - square_size)
     square_y = np.random.randint(0, height - square_size)
     image[square_x:square_x+square_size,square_y:square_y+square_size] = square_color
-    x_normalized = (square_x + square_size / 2) / width
-    y_normalized = (square_y + square_size / 2) / height
+    x_normalized = (float(square_x) + square_size // 2) / width
+    y_normalized = (float(square_y) + square_size // 2) / height
     return image, (x_normalized, y_normalized)
 
-def generate_random_graph(n, radius, height, width, seed=None):
-    G = nx.random_geometric_graph(n, radius)
+def generate_random_image_th(height, width, square_size, square_color, batch):
+    assert square_size > 1
+    im = th.rand(3, height, width)
+    square_x = th.randint(width - square_size, (1,))
+    square_y = th.randint(height - square_size, (1,))
+    square = th.cat([th.cat([square_color.transpose(0, 1)] * square_size, dim=1).unsqueeze_(2)] * square_size, dim=2)
+    im[:, square_y:square_y+square_size, square_x:square_x+square_size] = square
+    x_normalized = (float(square_x) + square_size // 2) / width
+    y_normalized = (float(square_y) + square_size // 2) / height
+    square_center = th.tensor((x_normalized, y_normalized)).resize_(1, 2)
+    if batch:
+        im = im.unsqueeze_(0)
+        square_center = square_center.unsqueeze_(0)
+    return im, square_center
+
+def generate_random_networkx(n, radius, seed=None):
+    G = nx.random_geometric_graph(n, radius, seed=seed)
     # position is stored as node attribute data for random_geometric_graph
     pos = nx.get_node_attributes(G, 'pos')
     for node, p in pos.items():
@@ -27,7 +43,15 @@ def generate_random_graph(n, radius, height, width, seed=None):
     nx.set_node_attributes(G, pos, name='pos')
     return G, pos
 
-def generate_groundtruth(sx, sy, pos):
+def generate_random_graph(n, radius, batch):
+    # arrange for points to fit more inside the unit square
+    x = 0.90 * (th.rand(n, 2) + 0.05)
+    edge_index = radius_graph(x, radius)
+    if batch:
+        x, edge_index = x.unsqueeze_(0), edge_index.unsqueeze_(0)
+    return x, edge_index
+
+def generate_groundtruth_np(sx, sy, pos):
     # find node near square center (sx, sy)
     d = np.sum(np.square(np.array(list(pos.values())) - np.array((sx, sy))), axis=1)
     nclose = np.argmin(d)
@@ -35,55 +59,65 @@ def generate_groundtruth(sx, sy, pos):
     one_hot[nclose] = 1
     return one_hot, nclose, np.sqrt(d[nclose])
 
-def generate_data(G, y, image, target_color, square_center=None, use_float32=True):
+def generate_groundtruth_th(center, x, batch):
+    dim = 2 if batch else 1
+    d = th.sum((x - center) ** 2, dim=dim)
+    nclose = th.argmin(d, dim=dim-1)
+    one_hot = F.one_hot(nclose, x.size(dim-1))  # [batch, num_nodes] or [num_nodes]
+    return one_hot
+
+def generate_data(n, height, width, target_color, batch, square_size=5, radius=0.125, use_float32=True):
     """Creates Data object
     Inputs:
-        - G (networkx graph): graph with pos attribute
-        - y (list or array): one hot encoded target in [num_nodes (, 1)]
-        - image (array): in [width, height, 3]
-        - target_color (tuple): float color RGB
-        - square center: not used
-        - use_float32: whether to use float16 or float32 type
+        - n (int): number of points in the graph
+        - height, widht (ints): image pixel size
+        - target_color (tuple): float color RGB embeded in the image as a square
+        - batch (bool): wether to unsqueeze in the first dim
+        - square_size (int): pixel size of square in image
+        - radius (float): value for edge generation based on closed neightbours between 0 and 1
+        - use_float32: whether to use float32 or float64 type
     
     Output:
         - Data object with attributes:
             - edge_index (tensor): [2, num_edges] connections between nodes
-            - pos (tensor): [num_nodes, 2] the 2D normalized positions
-            - y (tensor): [num_nodes, 1] node level target
+            - x (tensor): [num_nodes, 2] the 2D normalized positions between 0 and 1
+            - y (tensor): [num_nodes] node level target
             - im (tensor): in PyTorch style [3, height, width]
-            - target_color (tensor): [3]
+            - target_color (tensor): [1, 3]
+            - square_center (tensor): [1, 2]
 
-    The are no node or edge features (data.x, data.edge_attr)
+    The are no edge features (data.edge_attr)
     """
-    dtype = np.float32 if use_float32 else np.float64
-    data = from_networkx(G)
-    y = np.array(y, dtype=dtype)
-    y = th.tensor(y).reshape((-1, 1))
-    data.y = y
-    #data.image = image
-    data.im = th.tensor(image.astype(dtype).transpose(2, 1, 0))
-    data.target_color = th.FloatTensor(target_color) if use_float32 else th.DoubleTensor(target_color)
-    data.square_center = np.array(square_center, dtype=dtype)
-    return data
+    Tensor = th.FloatTensor if use_float32 else th.DoubleTensor
+    target_color = Tensor(target_color).resize_(1, 3)
+    if batch:
+        target_color = target_color.unsqueeze_(0)
+    x, edge_index = generate_random_graph(n, radius, batch)
+    im, square_center = generate_random_image_th(height, width, square_size, target_color, batch)
+    y = generate_groundtruth_th(square_center, x, batch)
+    return Data.from_dict({
+        'x': x,
+        'edge_index': edge_index,
+        'y': y,
+        'im': im,
+        'target_color': target_color,
+        'square_center': square_center
+    })
 
-def generate_dataloader():
-    data_list = []
-    loader = DataLoader(data_list, batch_size=32)
-
-def draw_data(data, image_ref, out=None):  # TODO
+def draw_data(data, out=None):
     G = to_networkx(data, node_attrs=None, edge_attrs=None)
-    pos = {node: p for node, p in zip(G.nodes, np.array(data.pos))}
+    pos = {node: p for node, p in zip(G.nodes, np.array(data.x))}
     nx.set_node_attributes(G, pos, name='pos')
-    image = np.array(data.im, dtype=np.float64).transpose(2, 1, 0)
-    
-    # chose colors from white to target_color
-    color = 1 - np.array(data.target_color, dtype=np.float64)
-    colors = np.stack([color] * len(pos))
-    target = np.array(data.y, dtype=np.float64) if out is None else np.array(out, dtype=np.float64)
-    colors = 1 - colors * target
-    draw_image_graph(image, G, colors=colors)
+    image = np.array(data.im.squeeze(), dtype=np.float64).transpose(2, 1, 0)
 
-def draw_image_graph(image, G, colors=None, target_color=None, alpha=0.5):
+    # chose colors from white to target_color
+    color = 1 - data.target_color
+    colors = th.stack([color[0]] * len(pos))
+    target = data.y if out is None else out
+    colors = 1 - target.unsqueeze(1) * colors
+    draw_image_graph(image, G, data.square_center.squeeze(), colors=np.array(colors, dtype=np.float64))
+
+def draw_image_graph(image, G, center, colors=None, target_color=None, alpha=0.5):
     width, height, _ = image.shape
     if colors is None:
         colors = np.random.random((len(G.nodes), 3))
@@ -99,17 +133,15 @@ def draw_image_graph(image, G, colors=None, target_color=None, alpha=0.5):
         origin='lower',  # The convention 'upper' is typically used for matrices and images
         alpha=alpha
     )
-    print('pos', pos[0], 'pos_large', pos_large[0])
     nx.draw_networkx(G, pos=pos_large, edge_color=(1., 1., 1.), node_color=colors)
+    plt.scatter(center[0] * width, center[1] * height, c='k')
     plt.axis('on')
     plt.show()
 
 if __name__ == "__main__":
     height, width = 32, 64
     target_color = (1.,0.,0.)
-    image, (sx, sy) = generate_random_image(height, width, square_size=5, square_color=target_color)
-    G, pos = generate_random_graph(100, 0.125, height, width)
-    y, nclose, dmin = generate_groundtruth(sx, sy, pos)
-    #draw_image_graph(image, G, target_color=(0, 1, 0))
-    data = generate_data(G, y, image, target_color, (sx, sy))
-    draw_data(data, image)
+    n = 100
+    radius = 0.125
+    data = generate_data(n, height, width, target_color, batch=False, radius=radius)
+    draw_data(data)
