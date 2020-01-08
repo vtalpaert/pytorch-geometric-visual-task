@@ -6,11 +6,15 @@ from .data import generate_data
 
 
 class GeoVisualDataset(IterableDataset):
-    def __init__(self, size, *args, **kwargs):
+    def __init__(self, size, *args, transform=None, **kwargs):
         super(GeoVisualDataset).__init__()
         self.size = size
+        self.transform = transform
         self.args = args
         self.kwargs = kwargs
+
+    def __len__(self):
+        return self.size
 
     def __iter__(self):
         worker_info = get_worker_info()
@@ -19,11 +23,15 @@ class GeoVisualDataset(IterableDataset):
         else:  # in a worker process
             # split workload
             size = int(self.size / float(worker_info.num_workers))
-        datalist = (generate_data(*self.args, **self.kwargs, batch=False) for _ in range(size))  # generator
-        return datalist  # iter(datalist)
+        if self.transform is not None:
+            datalist = (self.transform(generate_data(*self.args, **self.kwargs, batch=False)) for _ in range(size))  # generator
+        else:
+            datalist = (generate_data(*self.args, **self.kwargs, batch=False) for _ in range(size))  # generator
+        return datalist
 
 
-def generate_dataloader(dataset_size, batch_size, *args, **kwargs):
+def generate_dataloader(dataset_size, batch_size, *args, transform=None, **kwargs):
+    kwargs['transform'] = transform
     return DataLoader(GeoVisualDataset(dataset_size, *args, **kwargs), batch_size=batch_size)
 
 
@@ -34,7 +42,7 @@ if __name__ == "__main__":
     loader = generate_dataloader(1000, 8, 100, height, width, target_color)
     batch = next(iter(loader))
     print(batch)
-    print(batch.x.size())
-    print(batch.target_color)
-    data = batch.to_data_list()[0]
-    draw_data(data)
+    data0, data1 = batch.to_data_list()[0:2]
+    print(data0)
+    print(data1.edge_index)
+    next(iter(loader))
