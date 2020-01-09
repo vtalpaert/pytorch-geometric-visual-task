@@ -3,100 +3,67 @@ import matplotlib.pyplot as plt
 import networkx as nx
 import torch as th
 import torch.nn.functional as F
-from torch_geometric.data import Data
+from torch_geometric.data import Data, Batch
 from torch_geometric.utils import to_networkx
 from torch_geometric.nn import radius_graph
 
 
-def generate_random_image_np(height, width, square_size, square_color):
+def generate_random_image_th(height, width, square_size, square_color, batch_size, device):
     assert square_size > 1
-    image = np.random.random((width, height, 3))
-    square_x = np.random.randint(0, width - square_size)
-    square_y = np.random.randint(0, height - square_size)
-    image[square_x:square_x+square_size,square_y:square_y+square_size] = square_color
-    x_normalized = (float(square_x) + square_size // 2) / width
-    y_normalized = (float(square_y) + square_size // 2) / height
-    return image, (x_normalized, y_normalized)
-
-def generate_random_image_th(height, width, square_size, square_color, batch):
-    assert square_size > 1
-    im = th.rand(3, height, width)
-    square_x = th.randint(width - square_size, (1,))
-    square_y = th.randint(height - square_size, (1,))
-    color = square_color[0] if batch else square_color
+    im = th.rand(3, height, width, device=device)
+    square_x = th.randint(width - square_size, (1,), device=device)
+    square_y = th.randint(height - square_size, (1,), device=device)
+    color = square_color
     square = th.cat([th.cat([color.transpose(0, 1)] * square_size, dim=1).unsqueeze_(2)] * square_size, dim=2)
     im[0:3, square_y:square_y+square_size, square_x:square_x+square_size] = square
-    x_normalized = (float(square_x) + square_size // 2) / width
-    y_normalized = (float(square_y) + square_size // 2) / height
-    square_center = th.tensor((x_normalized, y_normalized)).resize_(1, 2)
-    if batch:
-        im = im.unsqueeze_(0)
-        square_center = square_center.unsqueeze_(0)
+    x_normalized = (square_x.item() + square_size // 2) / width
+    y_normalized = (square_y.item() + square_size // 2) / height
+    square_center = th.tensor((x_normalized, y_normalized), device=device).resize_(1, 2)
     return im, square_center
 
-def generate_random_networkx(n, radius, seed=None):
-    G = nx.random_geometric_graph(n, radius, seed=seed)
-    # position is stored as node attribute data for random_geometric_graph
-    pos = nx.get_node_attributes(G, 'pos')
-    for node, p in pos.items():
-        # arrange for points to fit more inside the unit square
-        pos[node] = [0.90 * (p[0] + 0.05), 0.90 * (p[1] + 0.05)]
-    nx.set_node_attributes(G, pos, name='pos')
-    return G, pos
-
-def generate_random_graph(n, radius, batch):
+def generate_random_graph(n, radius, max_num_neighbors, batch_size, device):
     # arrange for points to fit more inside the unit square
-    x = 0.90 * (th.rand(n, 2) + 0.05)
-    edge_index = radius_graph(x, radius, loop=True, max_num_neighbors=n)  # COO format
-    if batch:
-        x, edge_index = x.unsqueeze_(0), edge_index.unsqueeze_(0)
-    return x, edge_index
+    batch = None
+    x = 0.90 * (th.rand(n, 2, device=device) + 0.05)
+    edge_index = radius_graph(x, radius, batch=batch, loop=True, max_num_neighbors=max_num_neighbors)  # COO format
+    return x, edge_index, batch
 
-def generate_groundtruth_np(sx, sy, pos):
-    # find node near square center (sx, sy)
-    d = np.sum(np.square(np.array(list(pos.values())) - np.array((sx, sy))), axis=1)
-    nclose = np.argmin(d)
-    one_hot = np.zeros(len(pos))
-    one_hot[nclose] = 1
-    return one_hot, nclose, np.sqrt(d[nclose])
+def generate_groundtruth_th(center, x, batch, device):
+    d = th.sum((x - center) ** 2, dim=1)
+    nclose = th.argmin(d, dim=0)
+    one_hot = F.one_hot(nclose, x.size(0))  # [num_nodes * batch_size]
+    return one_hot, th.tensor([nclose], device=device)  # one_hot.type(dtype=th.float)
 
-def generate_groundtruth_th(center, x, batch):
-    dim = 2 if batch else 1
-    d = th.sum((x - center) ** 2, dim=dim)
-    nclose = th.argmin(d, dim=dim-1)
-    one_hot = F.one_hot(nclose, x.size(dim-1))  # [batch, num_nodes] or [num_nodes]
-    return one_hot, th.LongTensor([nclose])  # one_hot.type(dtype=th.float)
-
-def generate_data(n, height, width, target_color, batch, square_size=5, radius=0.125, use_float32=True):
+def generate_data(n, height, width, target_color, batch_size=1, device='cpu', square_size=5, radius=0.125, max_num_neighbors=5):
     """Creates Data object
     Inputs:
         - n (int): number of points in the graph
         - height, widht (ints): image pixel size
         - target_color (tuple): float color RGB embeded in the image as a square
-        - batch (bool): wether to unsqueeze in the first dim
+        - batch_size (int): TODO return a Batch (Data if batch_size is 1)
+        - device: ...
         - square_size (int): pixel size of square in image
         - radius (float): value for edge generation based on closed neighbours between 0 and 1
-        - use_float32: whether to use float32 or float64 type
+        - max_num_neighbors: ...
     
     Output:
         - Data object with attributes:
             - edge_index (tensor): [2, num_edges] connections between nodes
             - x (tensor): [num_nodes, 2] the 2D normalized positions between 0 and 1
             - y (tensor): [num_nodes] node level target
-            - nclose TODO
+            - nclose: ...
             - im (tensor): in PyTorch style [3, height, width]
             - target_color (tensor): [1, 3]
             - square_center (tensor): [1, 2]
 
     The are no edge features (data.edge_attr)
     """
-    Tensor = th.FloatTensor if use_float32 else th.DoubleTensor
-    target_color = Tensor(target_color).resize_(1, 3)
-    if batch:
-        target_color = target_color.unsqueeze_(0)
-    x, edge_index = generate_random_graph(n, radius, batch)
-    im, square_center = generate_random_image_th(height, width, square_size, target_color, batch)
-    y, nclose = generate_groundtruth_th(square_center, x, batch)
+    if batch_size > 1:
+        raise NotImplementedError("Creating a Batch directly is not implemented yet, use DataLoader to collate Data objects")
+    target_color = th.tensor([target_color], device=device)
+    x, edge_index, batch = generate_random_graph(n, radius, max_num_neighbors, batch_size, device)
+    im, square_center = generate_random_image_th(height, width, square_size, target_color, batch_size, device)
+    y, nclose = generate_groundtruth_th(square_center, x, batch, device)
     return Data.from_dict({
         'x': x,
         'edge_index': edge_index,
@@ -107,7 +74,11 @@ def generate_data(n, height, width, target_color, batch, square_size=5, radius=0
         'square_center': square_center
     })
 
-def draw_data(data, out=None, aux=None, block=False):
+def draw_data(data, out=None, aux=None, block=False, title=''):
+    data = data.to('cpu')
+    out = out.to('cpu') if out is not None else out
+    aux = aux.to('cpu') if aux is not None else aux
+    title = 'Data with closest node %i' % data.nclose.item() if not title else title
     G = to_networkx(data, node_attrs=None, edge_attrs=None)
     pos = {node: p for node, p in zip(G.nodes, np.array(data.x))}
     nx.set_node_attributes(G, pos, name='pos')
@@ -119,9 +90,9 @@ def draw_data(data, out=None, aux=None, block=False):
     target = data.y if out is None else out
     colors = 1 - target.unsqueeze(1) * colors
     center = data.square_center.squeeze() if aux is None else aux.squeeze()
-    draw_image_graph(image, G, center, colors=np.array(colors, dtype=np.float64), block=block)
+    draw_image_graph(image, G, center, colors=np.array(colors, dtype=np.float64), block=block, title=title)
 
-def draw_image_graph(image, G, center, colors=None, target_color=None, alpha=0.5, block=True):
+def draw_image_graph(image, G, center, colors=None, target_color=None, alpha=0.5, block=True, title='Geometric Visual'):
     width, height, _ = image.shape
     if colors is None:
         colors = np.random.random((len(G.nodes), 3))
@@ -141,6 +112,7 @@ def draw_image_graph(image, G, center, colors=None, target_color=None, alpha=0.5
     nx.draw_networkx(G, pos=pos_large, edge_color=(1., 1., 1.), node_color=colors)
     plt.scatter(center[0] * width, center[1] * height, c='k')
     plt.axis('on')
+    plt.title(title)
     plt.show(block=block)
     plt.pause(0.05)
 
@@ -149,9 +121,10 @@ if __name__ == "__main__":
     target_color = (1.,0.,0.)
     n = 100
     radius = 0.125
-    data = generate_data(n, height, width, target_color, batch=False, radius=radius)
+    max_num_neighbors = 5
+    data = generate_data(n, height, width, target_color, batch_size=1, radius=radius, max_num_neighbors=max_num_neighbors)
     print('data.x', data.x.type(), data.x.size())
     print('data.edge_index', data.edge_index.type(), data.edge_index.size())
     print('data.y', data.y.type(), data.y.size())
     print(data)
-    draw_data(data)
+    draw_data(data, block=True)

@@ -16,6 +16,12 @@ class GeoVisualDataset(IterableDataset):
     def __len__(self):
         return self.size
 
+    def _generate_data(self):
+        if self.transform is not None:
+            return self.transform(generate_data(*self.args, **self.kwargs))
+        else:
+            return generate_data(*self.args, **self.kwargs)
+
     def __iter__(self):
         worker_info = get_worker_info()
         if worker_info is None:  # single-process data loading, return the full iterator
@@ -23,10 +29,7 @@ class GeoVisualDataset(IterableDataset):
         else:  # in a worker process
             # split workload
             size = int(self.size / float(worker_info.num_workers))
-        if self.transform is not None:
-            datalist = (self.transform(generate_data(*self.args, **self.kwargs, batch=False)) for _ in range(size))  # generator
-        else:
-            datalist = (generate_data(*self.args, **self.kwargs, batch=False) for _ in range(size))  # generator
+        datalist = (self._generate_data() for _ in range(size))  # generator
         return datalist
 
 
