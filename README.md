@@ -6,6 +6,8 @@ This project is a simple on the fly dataset of a simple task : in a random graph
 
 ![output no radius](img/radius0_epoch190.png)
 
+Proximity to the center is calculated in normalized space, so beware to use only square images for now.
+
 ## TODOs
 
 - show example

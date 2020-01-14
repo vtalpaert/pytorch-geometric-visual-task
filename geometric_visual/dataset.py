@@ -22,6 +22,9 @@ class GeoVisualDataset(IterableDataset):
         else:
             return generate_data(*self.args, **self.kwargs)
 
+    def get_n(self, n):
+        return (self._generate_data() for _ in range(n))  # generator
+
     def __iter__(self):
         worker_info = get_worker_info()
         if worker_info is None:  # single-process data loading, return the full iterator
@@ -29,7 +32,7 @@ class GeoVisualDataset(IterableDataset):
         else:  # in a worker process
             # split workload
             size = int(self.size / float(worker_info.num_workers))
-        datalist = (self._generate_data() for _ in range(size))  # generator
+        datalist = self.get_n(size)
         return datalist
 
 
@@ -39,7 +42,6 @@ def generate_dataloader(dataset_size, batch_size, *args, transform=None, **kwarg
 
 
 if __name__ == "__main__":
-    from .data import draw_data
     height, width = 32, 64
     target_color = (1.,0.,0.)
     loader = generate_dataloader(1000, 8, 100, height, width, target_color)
