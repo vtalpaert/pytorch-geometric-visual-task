@@ -1,6 +1,7 @@
 from torch.utils.data.dataset import IterableDataset
 from torch.utils.data import get_worker_info
 from torch_geometric.data import DataLoader
+import torch_geometric.transforms as T
 
 from .data import generate_data
 
@@ -43,6 +44,11 @@ class GeoVisualDataset(IterableDataset):
 def generate_dataloader(dataset_size, batch_size, *args, transform=None, **kwargs):
     kwargs['transform'] = transform
     return DataLoader(GeoVisualDataset(dataset_size, *args, **kwargs), batch_size=batch_size)
+
+
+class AddNodeViews(object):
+    """Add a crop view of the image to each node"""
+    # TODO
 
 
 if __name__ == "__main__":
