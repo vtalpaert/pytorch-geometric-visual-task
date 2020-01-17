@@ -102,7 +102,7 @@ def draw_data_list(data_list, out_list=None, aux_list=None, fig=0, title='', blo
 
 def draw_n(n, title, model, model_device, dataset, block=False):
     with th.no_grad():
-        batch = Batch.from_data_list(list(dataset.get_n(n))).to(model_device)
+        batch = Batch.from_data_list(list(dataset.generate_n_data(n))).to(model_device)
         probs, aux = model(batch)
     data_list = batch.to_data_list()
     out_list = [probs[i] for i in range(n)]
@@ -112,6 +112,6 @@ def draw_n(n, title, model, model_device, dataset, block=False):
 
 if __name__ == '__main__':
     from .dataset import GeoVisualDataset
-    dataset = GeoVisualDataset(16, 20, 64, 64, (1.,0.,0.), radius=0.3)
+    dataset = GeoVisualDataset(16, 10, 64, 64, (1.,0.,0.), radius=0.3)
     data_list = list(dataset)
     draw_data_list(data_list, block=True)
