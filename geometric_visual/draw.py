@@ -56,7 +56,7 @@ def _data_to_nx(data, out=None, aux=None):
 
 def draw_data(data, out=None, aux=None, block=False, title='', ax=None):
     image, G, center, colors = _data_to_nx(data, out, aux)
-    title = 'Data with closest node %i' % data.nclose.item() if not title else title
+    title = 'Data with %ith closest node(s): %s' % (data.nclose.item() + 1, data.nclosest.tolist()) if not title else title
     draw_image_graph(image, G, center, colors=np.array(colors, dtype=np.float64), block=block, title=title, ax=ax)
 
 
@@ -112,6 +112,6 @@ def draw_n(n, title, model, model_device, dataset, block=False):
 
 if __name__ == '__main__':
     from .dataset import GeoVisualDataset
-    dataset = GeoVisualDataset(16, 10, 64, 64, (1.,0.,0.), radius=0.3)
+    dataset = GeoVisualDataset(16, 10, 3, 64, 64, (1.,0.,0.), radius=0.3)
     data_list = list(dataset)
     draw_data_list(data_list, block=True)

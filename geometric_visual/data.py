@@ -27,48 +27,51 @@ def generate_random_graph(n, radius, max_num_neighbors, batch_size, device):
     edge_index = radius_graph(x, radius, batch=batch, loop=True, max_num_neighbors=max_num_neighbors)  # COO format
     return x, edge_index, num_nodes, batch
 
-def generate_groundtruth_th(center, x, batch, device):
+def generate_groundtruth_th(center, x, nclose, batch, device):
     d = th.sum((x - center) ** 2, dim=1)
-    nclose = th.argmin(d, dim=0)
-    one_hot = F.one_hot(nclose, x.size(0))  # [num_nodes * batch_size]
-    return one_hot, th.tensor([nclose], device=device)  # one_hot.type(dtype=th.float)
+    nclosest = th.argsort(d, dim=0, descending=False)[nclose]
+    one_hot = F.one_hot(nclosest, x.size(0))
+    return one_hot, nclosest.unsqueeze_(0)  # one_hot.type(dtype=th.float)
 
-def generate_data(n, height, width, target_color, batch_size=1, device='cpu', square_size=5, radius=0.125, max_num_neighbors=5):
+def generate_data(n, nclose, height, width, target_color, batch_size=1, device='cpu', square_size=5, radius=0.125, max_num_neighbors=5):
     """Creates Data object
     Inputs:
         - n (int): number of points in the graph
+        - nclose (int): index of the closest point to find, first closest is nclose=0, second nclose=1
         - height, widht (ints): image pixel size
         - target_color (tuple): float color RGB embeded in the image as a square
         - batch_size (int): TODO return a Batch (Data if batch_size is 1)
-        - device: ...
+        - device (str or torch device): device for data, use only cpu for now as long as batch creation is not done
         - square_size (int): pixel size of square in image
         - radius (float): value for edge generation based on closed neighbours between 0 and 1
-        - max_num_neighbors: ...
+        - max_num_neighbors: maximum number of edges for graph creation
     
     Output:
         - Data object with attributes:
-            - edge_index (tensor): [2, num_edges] connections between nodes
-            - x (tensor): [num_nodes, 2] the 2D normalized positions between 0 and 1
-            - y (tensor): [num_nodes] node level target
-            - nclose: ...
-            - num_nodes_per_graph: ...
-            - im (tensor): in PyTorch style [1, 3, height, width]
-            - target_color (tensor): [1, 3]
-            - square_center (tensor): [1, 2]
+            - edge_index (LongTensor): [2, num_edges] connections between nodes
+            - x (FloatTensor): [num_nodes, 2] the 2D normalized positions between 0 and 1
+            - y (LongTensor): [num_nodes] node level target (use .type(dtype=torch.float) for FloatTensor)
+            - nclosest (LongTensor): [batch_size] contains the node index of the nclose-th closest
+            - num_nodes_per_graph (LongTensor): [batch_size] contains the number of nodes in the batch element
+            - im (tensor): in PyTorch style [batch_size, 3, height, width]
+            - target_color (tensor): [batch_size, 3]
+            - square_center (tensor): [batch_size, 2]
 
     The are no edge features (data.edge_attr)
     """
     if batch_size > 1:
         raise NotImplementedError("Creating a Batch directly is not implemented yet, use DataLoader to collate Data objects")
     target_color = th.tensor([target_color], device=device)
+    nclose_th = th.tensor([nclose], dtype=th.int, device=device)
     x, edge_index, num_nodes, batch = generate_random_graph(n, radius, max_num_neighbors, batch_size, device)
     im, square_center = generate_random_image_th(height, width, square_size, target_color, batch_size, device)
-    y, nclose = generate_groundtruth_th(square_center, x, batch, device)
+    y, nclosest = generate_groundtruth_th(square_center, x, nclose, batch, device)
     data = Data.from_dict({
         'x': x,
         'edge_index': edge_index,
         'y': y,
-        'nclose': nclose,
+        'nclose': nclose_th,
+        'nclosest': nclosest,
         'num_nodes_per_graph': num_nodes,
         'im': im,
         'target_color': target_color,
@@ -81,9 +84,10 @@ if __name__ == "__main__":
     height, width = 32, 64
     target_color = (1.,0.,0.)
     n = 100
+    nclose = 2
     radius = 0.125
     max_num_neighbors = 5
-    data = generate_data(n, height, width, target_color, batch_size=1, radius=radius, max_num_neighbors=max_num_neighbors)
+    data = generate_data(n, nclose, height, width, target_color, batch_size=1, radius=radius, max_num_neighbors=max_num_neighbors)
     print('data.x', data.x.type(), data.x.size())
     print('data.edge_index', data.edge_index.type(), data.edge_index.size())
     print('data.y', data.y.type(), data.y.size())

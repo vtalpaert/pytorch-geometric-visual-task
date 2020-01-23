@@ -54,7 +54,7 @@ class AddNodeViews(object):
 if __name__ == "__main__":
     height, width = 32, 64
     target_color = (1.,0.,0.)
-    loader = generate_dataloader(1000, 8, 100, height, width, target_color)
+    loader = generate_dataloader(1000, 8, 100, 1, height, width, target_color)
     batch = next(iter(loader))
     print(batch)
     data0, data1 = batch.to_data_list()[0:2]

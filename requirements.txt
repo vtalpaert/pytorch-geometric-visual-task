@@ -8,3 +8,4 @@ pydot
 pyyaml
 networkx
 tensorboard
+torch-geometric
