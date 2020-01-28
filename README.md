@@ -1,4 +1,4 @@
-# Geometric Visual: find the n-th closest node
+# PyTorch Geometric Visual Task: find the n-th closest node
 
 We solve a task mixing a visual input with message passing between nodes.
 
